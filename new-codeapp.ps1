@@ -201,7 +201,48 @@ Write-Step "Registering app on Power Platform..."
 if ($LASTEXITCODE -ne 0) { Write-Fail "pac code init failed."; Pop-Location; exit 1 }
 Write-Ok "App registered: '$displayName'"
 
-# ── 8. Dataverse data source ──────────────────────────────────────────────────
+# ── 7b. Deploy to Power Platform ──────────────────────────────────────────────
+Write-Step "Deploying app to Power Platform..."
+
+& $pac code push
+if ($LASTEXITCODE -ne 0) { Write-Fail "pac code push failed — run it manually later."; Pop-Location; exit 1 }
+Write-Ok "App deployed and published"
+
+# ── 7c. Add to Solution ───────────────────────────────────────────────────────
+Write-Host ""
+$addSolution = (Read-Host "  Add app to a solution? (y/N)").Trim()
+
+if ($addSolution -match '^[Yy]') {
+    $solutionName = (Read-Host "  Solution name").Trim()
+    
+    if ($solutionName) {
+        Write-Step "Managing solution: $solutionName"
+        
+        # List existing solutions to check if it exists
+        $solutions = & $pac solution list 2>&1 | ConvertFrom-Json
+        $solutionExists = $solutions | Where-Object { $_.UniqueName -eq $solutionName }
+        
+        if ($solutionExists) {
+            Write-Info "Solution '$solutionName' found — adding app..."
+            & $pac solution add-reference --solution-name $solutionName --project-name $displayName
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warn "Could not add app to existing solution — you may need to do this manually."
+            } else {
+                Write-Ok "App added to solution '$solutionName'"
+            }
+        } else {
+            Write-Info "Solution '$solutionName' does not exist — creating it..."
+            & $pac solution create --solution-name $solutionName --solution-display-name $solutionName --project-name $displayName
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warn "Could not create new solution — you may need to do this manually."
+            } else {
+                Write-Ok "Solution '$solutionName' created and app added"
+            }
+        }
+    }
+}
+
+# ── 9. Dataverse data source ──────────────────────────────────────────────
 $cfgConnId      = Get-CfgValue 'connectionId'
 $autoAddDs      = Get-CfgBool  'autoAddDataSource'
 
@@ -265,41 +306,57 @@ if ($doAddDs -and $connId) {
     }
 }
 
-# ── 9. Success ────────────────────────────────────────────────────────────────
+# ── 9. Push to GitHub ─────────────────────────────────────────────────────────
+$githubUser = Get-CfgValue 'githubUsername'
+
+if ($githubUser) {
+    Write-Step "Pushing to GitHub..."
+    
+    Push-Location $targetDir
+    
+    # Initialize git repo if not already initialized
+    if (-not (Test-Path '.git')) {
+        git init
+        git config user.name "$(git config --global user.name)"
+        git config user.email "$(git config --global user.email)"
+    }
+    
+    # Add all files
+    git add .
+    git commit -m "Initial commit: $displayName"
+    
+    # Create GitHub repo and push
+    $repoName = $folderName -replace ' ', '-'
+    Write-Info "Creating GitHub repository: $githubUser/$repoName"
+    
+    gh repo create $repoName --source=. --remote=origin --push --public
+    
+    if ($LASTEXITCODE -eq 0) {
+        Write-Ok "Repository pushed to GitHub: https://github.com/$githubUser/$repoName"
+    } else {
+        Write-Warn "Could not create GitHub repo — repository may already exist or push failed."
+        Write-Info "You may need to push manually: git push -u origin main"
+    }
+    
+    Pop-Location
+} else {
+    Write-Info "GitHub username not set in config.json — skipping GitHub push"
+}
+
+# ── 11. Success ───────────────────────────────────────────────────────────────
 Pop-Location
 Write-Host ""
 Write-Host "  ╔══════════════════════════════════════════════════╗" -ForegroundColor Green
 Write-Host "  ║                  You're all set!                 ║" -ForegroundColor Green
+Write-Host "  ║         $displayName is now live in Power Apps   ║" -ForegroundColor Green
 Write-Host "  ╚══════════════════════════════════════════════════╝" -ForegroundColor Green
 Write-Host ""
-Write-Host "  Next steps:" -ForegroundColor White
-Write-Host ""
-Write-Host "    cd $folderName" -ForegroundColor Yellow
-Write-Host "    npm run dev          " -NoNewline -ForegroundColor Yellow; Write-Host "# run locally" -ForegroundColor DarkGray
-Write-Host "    npm run build        " -NoNewline -ForegroundColor Yellow; Write-Host "# build for production" -ForegroundColor DarkGray
-Write-Host "    pac code push        " -NoNewline -ForegroundColor Yellow; Write-Host "# deploy to Power Platform" -ForegroundColor DarkGray
-Write-Host ""
 
-# Open in VS Code?
-$autoVSCode  = Get-CfgBool 'autoOpenVSCode'
-if ($autoVSCode) {
-    Write-Info "Opening in VS Code (autoOpenVSCode = true)..."
-    code $targetDir
-} else {
-    $openCode = (Read-Host "  Open in VS Code? (Y/n)").Trim()
-    if ($openCode -notmatch '^[Nn]') { code $targetDir }
-}
+# Always open in VS Code
+Write-Info "Opening in VS Code..."
+code $targetDir
 
-# Start dev server?
-$autoDev = Get-CfgBool 'autoStartDev'
-if ($autoDev) {
-    Write-Info "Starting dev server (autoStartDev = true)..."
-    Set-Location $targetDir
-    npm run dev
-} else {
-    $startDev = (Read-Host "  Start dev server? (Y/n)").Trim()
-    if ($startDev -notmatch '^[Nn]') {
-        Set-Location $targetDir
-        npm run dev
-    }
-}
+# Always start the dev server
+Write-Info "Starting dev server..."
+Set-Location $targetDir
+npm run dev
