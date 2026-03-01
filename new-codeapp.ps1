@@ -106,38 +106,42 @@ if ($pac) {
 }
 
 # ── 2. Gather inputs ──────────────────────────────────────────────────────────
-Write-Step "Configure your new app"
-Write-Host ""
 
-# Folder name — always prompt (unique per app)
-do {
-    $folderName = (Read-Host "  Folder name  (e.g. my-app)").Trim()
-} while (-not $folderName)
-
-# Display name — derive from folder name
-$defaultDisplay = (Get-Culture).TextInfo.ToTitleCase(
-    $folderName.Replace('-', ' ').Replace('_', ' ')
-)
-$displayInput = (Read-Host "  Display name [$defaultDisplay]").Trim()
-$displayName  = if ($displayInput) { $displayInput } else { $defaultDisplay }
-
-# Environment ID — use config value if set
-$cfgEnvId      = Get-CfgValue 'environmentId' '2e4ff4ce-5107-eaa2-b6dd-a2832dee7708'
-$envInput      = (Read-Host "  Environment ID [$cfgEnvId]").Trim()
-$environmentId = if ($envInput) { $envInput } else { $cfgEnvId }
-
-# Output directory — config value, or default to parent of the quickstart repo
+# Resolve output base first so we can show it before prompting
 $cfgOutDir  = Get-CfgValue 'outputDirectory'
 $outputBase = if ($cfgOutDir -and (Test-Path $cfgOutDir)) {
     $cfgOutDir
 } else {
     Split-Path $PSScriptRoot -Parent
 }
+$outputSource = if ($cfgOutDir -and (Test-Path $cfgOutDir)) { 'config.json' } else { 'auto-detected' }
+
+Write-Step "Configure your new app"
+Write-Host ""
+Write-Host "  Apps will be created in:" -ForegroundColor DarkGray
+Write-Host "  $outputBase" -ForegroundColor White
+Write-Host "  ($outputSource — set outputDirectory in config.json to change)" -ForegroundColor DarkGray
+Write-Host ""
+
+# App name — this becomes both the folder name and basis for display name
+do {
+    $folderName = (Read-Host "  App name  (e.g. HR Resource Management)").Trim()
+} while (-not $folderName)
+
 $targetDir = Join-Path $outputBase $folderName
+
+# Display name — default to the app name as typed
+$displayInput = (Read-Host "  Display name [$folderName]").Trim()
+$displayName  = if ($displayInput) { $displayInput } else { $folderName }
+
+# Environment ID — use config value if set
+$cfgEnvId      = Get-CfgValue 'environmentId' '2e4ff4ce-5107-eaa2-b6dd-a2832dee7708'
+$envInput      = (Read-Host "  Environment ID [$cfgEnvId]").Trim()
+$environmentId = if ($envInput) { $envInput } else { $cfgEnvId }
 
 Write-Host ""
 Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
-Write-Host "  Folder:       $targetDir"
+Write-Host "  Creating:     $targetDir"
 Write-Host "  Display name: $displayName"
 Write-Host "  Environment:  $environmentId"
 Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
