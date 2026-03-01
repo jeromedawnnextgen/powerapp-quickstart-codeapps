@@ -1,6 +1,7 @@
 {
   "_readme": "Copy this file to config.json and fill in your values. config.json is gitignored.",
 
+  "outputDirectory":  "",
   "environmentId":    "",
   "connectionId":     "",
   "pacCliPath":       "",

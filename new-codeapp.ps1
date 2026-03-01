@@ -126,7 +126,14 @@ $cfgEnvId      = Get-CfgValue 'environmentId' '2e4ff4ce-5107-eaa2-b6dd-a2832dee7
 $envInput      = (Read-Host "  Environment ID [$cfgEnvId]").Trim()
 $environmentId = if ($envInput) { $envInput } else { $cfgEnvId }
 
-$targetDir = Join-Path (Get-Location) $folderName
+# Output directory — config value, or default to parent of the quickstart repo
+$cfgOutDir  = Get-CfgValue 'outputDirectory'
+$outputBase = if ($cfgOutDir -and (Test-Path $cfgOutDir)) {
+    $cfgOutDir
+} else {
+    Split-Path $PSScriptRoot -Parent
+}
+$targetDir = Join-Path $outputBase $folderName
 
 Write-Host ""
 Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
@@ -148,9 +155,9 @@ if ($confirm -match '^[Nn]') { exit 0 }
 # ── 3. Scaffold ───────────────────────────────────────────────────────────────
 Write-Step "Scaffolding from Microsoft template..."
 
-npx degit github:microsoft/PowerAppsCodeApps/templates/vite $folderName
+npx degit github:microsoft/PowerAppsCodeApps/templates/vite $targetDir
 if ($LASTEXITCODE -ne 0) { Write-Fail "Scaffold failed."; exit 1 }
-Write-Ok "Project created at $folderName/"
+Write-Ok "Project created at $targetDir"
 
 # ── 4. Install dependencies ───────────────────────────────────────────────────
 Write-Step "Installing npm dependencies..."
