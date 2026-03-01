@@ -4,8 +4,9 @@
     Interactive quickstart wizard for a new Power Apps Code App.
 .DESCRIPTION
     Scaffolds, installs dependencies, authenticates, selects environment,
-    registers the app, and optionally wires up a Dataverse data source —
-    all in one shot.
+    registers the app, and optionally wires up a Dataverse data source.
+    Reads defaults from config.json if present — copy config.example.json
+    to get started.
 .EXAMPLE
     .\new-codeapp.ps1
 #>
@@ -29,13 +30,51 @@ Write-Host "  ║                  NextGen PowerApps               ║" -Foregro
 Write-Host "  ╚══════════════════════════════════════════════════╝" -ForegroundColor Magenta
 Write-Host ""
 
+# ── Load config.json ──────────────────────────────────────────────────────────
+$cfg = $null
+$configPath = Join-Path $PSScriptRoot 'config.json'
+
+if (Test-Path $configPath) {
+    try {
+        $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
+        Write-Host "  ⚙  Loaded config.json" -ForegroundColor DarkGray
+    } catch {
+        Write-Warn "config.json found but could not be parsed — using defaults."
+        $cfg = $null
+    }
+} else {
+    Write-Info "No config.json found. Copy config.example.json to set defaults."
+}
+
+# Helper: get a config value or fall back to a default
+function Get-CfgValue {
+    param($property, $fallback = '')
+    if ($cfg -and $cfg.PSObject.Properties[$property]) {
+        $val = $cfg.$property
+        if ($null -ne $val -and "$val".Trim() -ne '') { return "$val".Trim() }
+    }
+    return $fallback
+}
+
+function Get-CfgBool {
+    param($property, $fallback = $false)
+    if ($cfg -and $cfg.PSObject.Properties[$property]) {
+        return [bool]$cfg.$property
+    }
+    return $fallback
+}
+
 # ── Locate PAC CLI ────────────────────────────────────────────────────────────
 function Get-PacCli {
-    # 1. System PATH
+    # 1. config.json override
+    $cfgPath = Get-CfgValue 'pacCliPath'
+    if ($cfgPath -and (Test-Path $cfgPath)) { return $cfgPath }
+
+    # 2. System PATH
     $inPath = Get-Command pac -ErrorAction SilentlyContinue
     if ($inPath) { return 'pac' }
 
-    # 2. VS Code Power Platform extension (common install location)
+    # 3. VS Code Power Platform extension
     $vscodePac = Join-Path $env:APPDATA `
         'Code\User\globalStorage\microsoft-isvexptools.powerplatform-vscode\pac\tools\pac.exe'
     if (Test-Path $vscodePac) { return $vscodePac }
@@ -46,7 +85,6 @@ function Get-PacCli {
 # ── 1. Prerequisite check ─────────────────────────────────────────────────────
 Write-Step "Checking prerequisites..."
 
-# Node.js
 try {
     $nodeVer = node --version 2>&1
     Write-Ok "Node.js $nodeVer"
@@ -56,7 +94,6 @@ try {
     exit 1
 }
 
-# PAC CLI
 $pac = Get-PacCli
 if ($pac) {
     Write-Ok "PAC CLI found  →  $pac"
@@ -64,6 +101,7 @@ if ($pac) {
     Write-Fail "PAC CLI not found."
     Write-Info "Install option 1: winget install Microsoft.PowerPlatformCLI"
     Write-Info "Install option 2: VS Code → Power Platform Tools extension"
+    Write-Info "Install option 3: Set pacCliPath in config.json"
     exit 1
 }
 
@@ -71,24 +109,23 @@ if ($pac) {
 Write-Step "Configure your new app"
 Write-Host ""
 
-# Folder / slug name
+# Folder name — always prompt (unique per app)
 do {
     $folderName = (Read-Host "  Folder name  (e.g. my-app)").Trim()
 } while (-not $folderName)
 
-# Human-readable display name
+# Display name — derive from folder name
 $defaultDisplay = (Get-Culture).TextInfo.ToTitleCase(
     $folderName.Replace('-', ' ').Replace('_', ' ')
 )
-$displayInput  = (Read-Host "  Display name [$defaultDisplay]").Trim()
-$displayName   = if ($displayInput) { $displayInput } else { $defaultDisplay }
+$displayInput = (Read-Host "  Display name [$defaultDisplay]").Trim()
+$displayName  = if ($displayInput) { $displayInput } else { $defaultDisplay }
 
-# Environment ID
-$defaultEnvId  = '2e4ff4ce-5107-eaa2-b6dd-a2832dee7708'
-$envInput      = (Read-Host "  Environment ID [$defaultEnvId]").Trim()
-$environmentId = if ($envInput) { $envInput } else { $defaultEnvId }
+# Environment ID — use config value if set
+$cfgEnvId      = Get-CfgValue 'environmentId' '2e4ff4ce-5107-eaa2-b6dd-a2832dee7708'
+$envInput      = (Read-Host "  Environment ID [$cfgEnvId]").Trim()
+$environmentId = if ($envInput) { $envInput } else { $cfgEnvId }
 
-# Destination folder (sibling of wherever the script is run from)
 $targetDir = Join-Path (Get-Location) $folderName
 
 Write-Host ""
@@ -153,43 +190,67 @@ Write-Step "Registering app on Power Platform..."
 if ($LASTEXITCODE -ne 0) { Write-Fail "pac code init failed."; Pop-Location; exit 1 }
 Write-Ok "App registered: '$displayName'"
 
-# ── 8. Optional: Dataverse data source ───────────────────────────────────────
-Write-Host ""
-$addDs = (Read-Host "  Add a Dataverse data source now? (y/N)").Trim()
+# ── 8. Dataverse data source ──────────────────────────────────────────────────
+$cfgConnId      = Get-CfgValue 'connectionId'
+$autoAddDs      = Get-CfgBool  'autoAddDataSource'
 
-if ($addDs -match '^[Yy]') {
+# Decide whether to add data source
+$doAddDs = $false
+if ($cfgConnId -and $autoAddDs) {
+    # Both set in config — run silently
+    $doAddDs  = $true
+    $connId   = $cfgConnId
     Write-Host ""
-    Write-Info "Run this in another terminal to find your connection ID:"
-    Write-Info "  $pac connection list"
+    Write-Info "Data source: using connectionId from config.json"
+} else {
     Write-Host ""
-    $connId = (Read-Host "  Paste your Connection ID").Trim()
+    $dsPrompt = if ($cfgConnId) { "  Add Dataverse data source? (connection ID pre-filled) (Y/n)" } `
+                else            { "  Add a Dataverse data source now? (y/N)" }
+    $addDsAnswer = (Read-Host $dsPrompt).Trim()
 
-    if ($connId) {
-        Write-Step "Adding Dataverse data source..."
-        & $pac code add-data-source -a "shared_commondataserviceforapps" -c $connId
-
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warn "add-data-source failed — run it manually when ready."
-        } else {
-            Write-Ok "Data source added"
-
-            # Fix known Microsoft bug: dot in TypeScript parameter name
-            Write-Step "Patching generated service file (MSCRM dot-name bug)..."
-            $svcFile = "src\generated\services\MicrosoftDataverseService.ts"
-
-            if (Test-Path $svcFile) {
-                $content = Get-Content $svcFile -Raw
-                $patched = $content -replace 'MSCRM\.IncludeMipSensitivityLabel', 'MSCRM_IncludeMipSensitivityLabel'
-                $patchCount = ([regex]::Matches($content, 'MSCRM\.IncludeMipSensitivityLabel')).Count
-                Set-Content $svcFile $patched -NoNewline
-                Write-Ok "Patched $patchCount occurrence(s) of MSCRM.IncludeMipSensitivityLabel"
-            } else {
-                Write-Warn "Service file not found — if the build fails, replace:"
-                Write-Info "  MSCRM.IncludeMipSensitivityLabel  →  MSCRM_IncludeMipSensitivityLabel"
-            }
-        }
+    $defaultYes = [bool]$cfgConnId
+    if ($defaultYes) {
+        $doAddDs = $addDsAnswer -notmatch '^[Nn]'
     } else {
-        Write-Warn "No connection ID entered — skipping data source."
+        $doAddDs = $addDsAnswer -match '^[Yy]'
+    }
+
+    if ($doAddDs) {
+        if ($cfgConnId) {
+            $connInput = (Read-Host "  Connection ID [$cfgConnId]").Trim()
+            $connId    = if ($connInput) { $connInput } else { $cfgConnId }
+        } else {
+            Write-Host ""
+            Write-Info "Run this in another terminal to find your connection ID:"
+            Write-Info "  $pac connection list"
+            Write-Host ""
+            $connId = (Read-Host "  Paste your Connection ID").Trim()
+        }
+    }
+}
+
+if ($doAddDs -and $connId) {
+    Write-Step "Adding Dataverse data source..."
+    & $pac code add-data-source -a "shared_commondataserviceforapps" -c $connId
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "add-data-source failed — run it manually when ready."
+    } else {
+        Write-Ok "Data source added"
+
+        Write-Step "Patching generated service file (MSCRM dot-name bug)..."
+        $svcFile = "src\generated\services\MicrosoftDataverseService.ts"
+
+        if (Test-Path $svcFile) {
+            $content    = Get-Content $svcFile -Raw
+            $patchCount = ([regex]::Matches($content, 'MSCRM\.IncludeMipSensitivityLabel')).Count
+            $patched    = $content -replace 'MSCRM\.IncludeMipSensitivityLabel', 'MSCRM_IncludeMipSensitivityLabel'
+            Set-Content $svcFile $patched -NoNewline
+            Write-Ok "Patched $patchCount occurrence(s) of MSCRM.IncludeMipSensitivityLabel"
+        } else {
+            Write-Warn "Service file not found — if the build fails, replace:"
+            Write-Info "  MSCRM.IncludeMipSensitivityLabel  →  MSCRM_IncludeMipSensitivityLabel"
+        }
     }
 }
 
@@ -203,23 +264,31 @@ Write-Host ""
 Write-Host "  Next steps:" -ForegroundColor White
 Write-Host ""
 Write-Host "    cd $folderName" -ForegroundColor Yellow
-Write-Host "    npm run dev          " -NoNewline -ForegroundColor Yellow
-Write-Host "# run locally" -ForegroundColor DarkGray
-Write-Host "    npm run build        " -NoNewline -ForegroundColor Yellow
-Write-Host "# build for production" -ForegroundColor DarkGray
-Write-Host "    pac code push        " -NoNewline -ForegroundColor Yellow
-Write-Host "# deploy to Power Platform" -ForegroundColor DarkGray
+Write-Host "    npm run dev          " -NoNewline -ForegroundColor Yellow; Write-Host "# run locally" -ForegroundColor DarkGray
+Write-Host "    npm run build        " -NoNewline -ForegroundColor Yellow; Write-Host "# build for production" -ForegroundColor DarkGray
+Write-Host "    pac code push        " -NoNewline -ForegroundColor Yellow; Write-Host "# deploy to Power Platform" -ForegroundColor DarkGray
 Write-Host ""
 
 # Open in VS Code?
-$openCode = (Read-Host "  Open in VS Code? (Y/n)").Trim()
-if ($openCode -notmatch '^[Nn]') {
+$autoVSCode  = Get-CfgBool 'autoOpenVSCode'
+if ($autoVSCode) {
+    Write-Info "Opening in VS Code (autoOpenVSCode = true)..."
     code $targetDir
+} else {
+    $openCode = (Read-Host "  Open in VS Code? (Y/n)").Trim()
+    if ($openCode -notmatch '^[Nn]') { code $targetDir }
 }
 
 # Start dev server?
-$startDev = (Read-Host "  Start dev server? (Y/n)").Trim()
-if ($startDev -notmatch '^[Nn]') {
+$autoDev = Get-CfgBool 'autoStartDev'
+if ($autoDev) {
+    Write-Info "Starting dev server (autoStartDev = true)..."
     Set-Location $targetDir
     npm run dev
+} else {
+    $startDev = (Read-Host "  Start dev server? (Y/n)").Trim()
+    if ($startDev -notmatch '^[Nn]') {
+        Set-Location $targetDir
+        npm run dev
+    }
 }

@@ -1,0 +1,10 @@
+{
+  "_readme": "Copy this file to config.json and fill in your values. config.json is gitignored.",
+
+  "environmentId":    "",
+  "connectionId":     "",
+  "pacCliPath":       "",
+  "autoAddDataSource": false,
+  "autoOpenVSCode":   true,
+  "autoStartDev":     false
+}
